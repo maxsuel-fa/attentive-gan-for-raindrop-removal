@@ -5,14 +5,8 @@ from torch.autograd import Variable
 import torch.utils.data as Data
 import torch.nn.functional as F
 import torchvision
-#Tools lib
-import numpy as np
-import cv2
-import random
-import time
-import os
 
-#Model
+
 class Discriminator(nn.Module):
     def __init__(self):
         super(Discriminator, self).__init__()
