@@ -57,7 +57,7 @@ if __name__ == '__main__':
     args = get_args()
 
     model = Generator().cuda()
-    model.load_state_dict(torch.load('./weights/gen.pkl'))
+    model.load_state_dict(torch.load('./weights/test/weights_epoch_500.tar')['gen_state_dict'])
 
     if args.mode == 'demo':
         input_list = sorted(os.listdir(args.input_dir))

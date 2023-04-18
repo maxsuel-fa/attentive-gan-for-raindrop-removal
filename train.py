@@ -1,7 +1,7 @@
 from torchvision.transforms import Resize
 
 from data.dataset import Dataset
-from models import *
+from models.attgan import ATTGAN
 from utils.options import parse_train_options
 
 if __name__ == '__main__':

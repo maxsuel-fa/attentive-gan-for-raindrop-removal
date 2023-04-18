@@ -171,7 +171,7 @@ class Generator(nn.Module):
             g = self.conv_g(x)
             o = self.conv_o(x)
             c = f * c + i * g
-            h = o * F.tanh(c)
+            h = o * torch.tanh(c)
             mask = self.det_conv_mask(h)
             mask_list.append(mask)
         x = torch.cat((input, mask), 1)

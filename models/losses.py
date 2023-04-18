@@ -58,6 +58,7 @@ class DiscLoss(nn.Module):
                 + self.log_criterion(y, zeros)) 
         
         zeros = self.zeros.expand_as(x_)
+        
         loss += self.alpha * (self.mse_criterion(x_, zeros)
                               + self.mse_criterion(y_, A))
         return loss
@@ -68,6 +69,7 @@ class MultscaledLoss(nn.Module):
     def __init__(self, 
                  weights: List[float] = [0.6, 0.8, 1.0]) -> None:
         """ TODO """
+        super(MultscaledLoss, self).__init__()
         self.criterion = nn.MSELoss()
         self.weights = weights
 
@@ -97,10 +99,6 @@ class PerceptualLoss(nn.Module):
         return_layers = {str(i): 'layer' + str(i) for i in return_layers}
         self.model = Vgg19FeatExtrator(return_layers)
         self.criterion = nn.L1Loss()
-        
-        num_of_layer = len(return_layers)
-        self.weights = [1.0 / float(2**(num_of_layer - i))
-                        for i in range(1, num_of_layer + 1)]
 
     def forward(self, x: Tensor, y: Tensor) -> Tensor:
         """ Calculates the Perceptual loss between the x and y tensors.
@@ -114,7 +112,7 @@ class PerceptualLoss(nn.Module):
         vgg_x = self.model(x)
         vgg_y = self.model(y)
         for i in range(len(vgg_x)):
-            loss += self.weights[i] * self.criterion(vgg_x[i], vgg_y[i])
+            loss += self.criterion(vgg_x[i], vgg_y[i])
         return loss
 
 
@@ -124,6 +122,7 @@ class AttentiveLoss(nn.Module):
                  theta: float = 0.8, 
                  N: int = 4) -> None:
         """ TODO """
+        super(AttentiveLoss, self).__init__()
         self.criterion = nn.MSELoss()
         self.N = N
         self.theta = theta
@@ -132,7 +131,7 @@ class AttentiveLoss(nn.Module):
         """ TODO """
         loss = 0.0
         for i in range(self.N):
-            loss += (self.theta**(self.N - i + 1)) * self.criterion(A[i], M[i])
+            loss += (self.theta**(self.N - i + 1)) * self.criterion(A[i], M)
 
         return loss
 
