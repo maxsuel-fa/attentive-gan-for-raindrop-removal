@@ -85,3 +85,16 @@ class Dataset(TorchDataset):
         ground_truth = self.transform(ground_truth.convert('RGB'))
 
         return image_data, ground_truth
+
+class TripleFoggyCityScapes(Dataset):
+    def __init__(self, data_dir: str, g_truth_dir: str, transforms, max_samples: int = 100000) -> None:
+        super().__init__(data_dir, g_truth_dir, transforms, max_samples)
+
+    def __getitem__(self, index: int) -> Tuple[Tensor, Tensor]:
+        image_data = Image.open(self.data_paths[index])
+        image_data = self.transform(image_data.convert('RGB'))
+
+        ground_truth = Image.open(self.g_truth_paths[index // 3])
+        ground_truth = self.transform(ground_truth.convert('RGB'))
+
+        return image_data, ground_truth

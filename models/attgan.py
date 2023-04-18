@@ -1,6 +1,7 @@
 import numpy as np
 import os
 import time
+import matplotlib.pyplot as plt
 
 import torch
 import torch.distributed as dist
@@ -13,12 +14,14 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from torchvision.transforms.functional import rgb_to_grayscale
+from torchvision.transforms import ToPILImage
 
-from typing import Any, Dict, Union
+from typing import Any, Dict, Union, List
 from collections import OrderedDict
 
 from .generator import Generator
 from .discriminator import Discriminator
+from .losses import *
 from data.dataset import Dataset
 from utils.options import parse_train_options
 
@@ -56,53 +59,43 @@ class ATTGAN:
             train_options (Any) -- options like number of gpus to be used,
                                    batch size, learning rate and so on
         """
-        dist.init_process_group('nccl')
-
-        rank = dist.get_rank()
-        n_gpus = train_options.n_gpus
-
-        assert (n_gpus <= device_count()
-                and n_gpus <= train_options.batch_size)
-
-        sampler = DistributedSampler(train_dataset,
-                                     num_replicas=n_gpus,
-                                     rank=rank)
-
         dataloader = DataLoader(train_dataset,
-                                shuffle=False,
+                                shuffle=True,
                                 batch_size=train_options.batch_size,
-                                num_workers=0,
-                                sampler=sampler)
+                                num_workers=0)
 
         # distributed models
-        device_id = rank % n_gpus
+        device_id = 'cuda'
         self.model.to(device_id)
-        self.ddp_gen = DDP(self.model, device_ids=[device_id])
         self.discriminator.to(device_id)
-        self.ddp_disc = DDP(self.discriminator, device_ids=[device_id])
 
         # optimizers
-        self.gen_optim = optim.Adam(self.ddp_gen.parameters(), lr=train_options.lr)
-        self.disc_optim = optim.Adam(self.ddp_disc.parameters(), lr=train_options.lr)
+        self.gen_optim = optim.Adam(self.model.parameters(), lr=train_options.lr)
+        self.disc_optim = optim.Adam(self.discriminator.parameters(), lr=train_options.lr)
 
         # GAN criterion
         adv_criterion = AdvLoss().to(device_id)
         
         # generator criterions
-        attentive_criterion = AttentiveLoss()
-        multscaled_criterion = MultscaledLoss()
+        attentive_criterion = AttentiveLoss().to(device_id)
+        multscaled_criterion = MultscaledLoss().to(device_id)
         vgg_criterion = PerceptualLoss([1, 6, 11, 20, 29]).to(device_id)
 
         # discriminator criterion
         disc_criterion = DiscLoss().to(device_id)
 
         if train_options.start_epoch > 0:
-            self.load(rank,
-                      checkpoint_dir=train_options.checkpoint_dir,
+            self.load(checkpoint_dir=train_options.checkpoint_dir,
                       epoch=train_options.start_epoch,
                       is_train=True)
 
         start_time = time.time()
+
+        to_pil = ToPILImage()
+        figure = plt.figure(figsize=(20, 5), constrained_layout=True)
+        grid_rows = 1
+        grid_cols = 4
+
         for epoch in range(train_options.start_epoch,
                            train_options.n_epochs + train_options.start_epoch):
             epoch_start_time = time.time()
@@ -118,24 +111,25 @@ class ATTGAN:
                 R = R.to(device_id)
 
                 # fake generation
-                A, O_quater, O_half, O = self.ddp_gen(I)
+                A, O_quater, O_half, O = self.model(I)
 
                 # updating the discriminator
-                R_feat, R_pred = self.ddp_disc(R)
-                O_feat, O_pred = self.ddp_disc(O)
+                R_feat, R_pred = self.discriminator(R)
+                O_feat, O_pred = self.discriminator(O)
 
                 disc_loss = disc_criterion(R_pred,
                                            O_pred,
                                            R_feat,
-                                           O_feat)
+                                           O_feat,
+                                           A[-1])
 
                 self.disc_optim.zero_grad()
                 disc_loss.backward(retain_graph=True)
                 self.disc_optim.step()
 
                 # updating the generator
-                _, R_pred = self.ddp_disc(R)
-                _, O_pred = self.ddp_disc(O)
+                _, R_pred = self.discriminator(R)
+                _, O_pred = self.discriminator(O)
 
                 adv_loss = adv_criterion(O_pred)
                 vgg_loss = vgg_criterion(O, R)
@@ -146,7 +140,7 @@ class ATTGAN:
                 multscaled_loss = multscaled_criterion(R_list, O_list)
 
                 # Attentive loss
-                M = self._binary_mask(I, R)
+                M = self._binary_mask(I, R).to(device_id)
                 attentive_loss = attentive_criterion(A, M)
                 
                 gen_loss = (0.02 * adv_loss 
@@ -158,7 +152,41 @@ class ATTGAN:
                 gen_loss.backward()
                 self.gen_optim.step()
 
+                """derained_image = torch.squeeze(O, dim=0)
+                derained_image = to_pil(derained_image)
 
+                rainy_image = torch.squeeze(I, dim=0)
+                rainy_image = to_pil(rainy_image)
+        
+                clear_image = torch.squeeze(R, dim=0)
+                clear_image = to_pil(clear_image)
+
+                map = torch.squeeze(A[-1], dim=0)
+                map = to_pil(map)
+
+                figure.add_subplot(grid_rows, grid_cols, 1)
+                plt.imshow(clear_image, cmap=None)
+                plt.axis('off')
+                plt.title('Ground Truth')
+
+                figure.add_subplot(grid_rows, grid_cols, 2)
+                plt.imshow(rainy_image, cmap=None)
+                plt.axis('off')
+                plt.title('Rainy Image')
+
+                figure.add_subplot(grid_rows, grid_cols, 3)
+                plt.imshow(derained_image, cmap=None)
+                plt.axis('off')
+                plt.title('Derained Image')
+
+                figure.add_subplot(grid_rows, grid_cols, 4)
+                plt.imshow(map, cmap='rainbow', interpolation='lanczos')
+                plt.axis('off')
+                plt.title('Attention Map')
+
+                plt.pause(1e-9)"""
+
+            
             # calculates the time already spent on training
             curr_spent_time = time.time() - start_time
 
@@ -204,39 +232,36 @@ class ATTGAN:
         save_path = 'weights_' + 'epoch_' + str(current_epoch) + '.tar'
         save_path = os.path.join(checkpoint_dir, save_path)
 
-        torch.save({'gen_state_dict': self.ddp_gen.state_dict(),
-                    'disc_state_dict': self.ddp_disc.state_dict(),
+        torch.save({'gen_state_dict': self.model.state_dict(),
+                    'disc_state_dict': self.discriminator.state_dict(),
                     'gen_optim_state_dict': self.gen_optim.state_dict(),
                     'disc_optim_state_dict': self.disc_optim.state_dict()},
                    save_path)
 
     def load(self,
-             rank: int,
              checkpoint_dir: str,
              epoch: Union[int, str] = 'latest',
              is_train: bool = False) -> None:
         """ Load the last checkpoint trained until the given epoch.
 
         Parameters:
-            rank (int) -- TODO
             checkpoint_dir (str) -- path to the directory where the model was saved
             epoch (int) -- the checkpoint epoch. Default: 'latest'
             is_train (bool) -- whether is training regime or not. Default: False
         """
         load_path = 'weights_' + 'epoch_' + str(epoch) + '.tar'
         load_path = os.path.join(checkpoint_dir, load_path)
-        map_location = {'cuda:%d' % 0: 'cuda:%d' % rank}
-        checkpoint_dict = torch.load(load_path, map_location=map_location)
+
+        checkpoint_dict = torch.load(load_path, map_location='cuda')
 
         if is_train:
-            self.ddp_gen.load_state_dict(checkpoint_dict['gen_state_dict'])
-            self.ddp_disc.load_state_dict(checkpoint_dict['disc_state_dict'])
+            self.model.load_state_dict(checkpoint_dict['gen_state_dict'])
+            self.discriminator.load_state_dict(checkpoint_dict['disc_state_dict'])
             self.gen_optim.load_state_dict(checkpoint_dict['gen_optim_state_dict'])
             self.disc_optim.load_state_dict(checkpoint_dict['disc_optim_state_dict'])
             return
 
-        unwraped_state_dict = self._unwrap_state_dict(checkpoint_dict['gen_state_dict'])
-        self.model.load_state_dict(unwraped_state_dict)
+        self.model.load_state_dict(checkpoint_dict['gen_state_dict'])
 
     def _weights_init(self, module: nn.Module) -> None:
         """ TODO """
@@ -275,7 +300,7 @@ class ATTGAN:
         if verbose:
             print('The new learning rate is: {}'%lr)
 
-    def _gt_multscale(R: Tensor) -> List[Tensor]:
+    def _gt_multscale(self, R: Tensor) -> List[Tensor]:
         """ TODO """
         downsampler = nn.MaxPool2d(4, stride=2, padding=1)
         R_half = downsampler(R)
@@ -283,12 +308,12 @@ class ATTGAN:
 
         return [R_quarter, R_half, R]
 
-    def _binary_mask(I, R, treshold: float = 0.1176) -> Tensor:
+    def _binary_mask(self, I, R, treshold: float = 0.1176) -> Tensor:
         """ TODO """
         M = torch.abs(I - R)
         M = rgb_to_grayscale(M)
         M = M.ge(treshold)
-        M = M.type('torch.CharTensor')
+        M = M.type('torch.FloatTensor')
 
         return M
 
